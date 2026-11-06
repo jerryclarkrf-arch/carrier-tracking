@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import Nav from '@/components/Nav';
 import LoadMap from '@/components/LoadMap';
+import { FLAG_LABELS, RISK_COPY } from '@/lib/risk';
 
 interface Stop {
   seq: number;
@@ -29,7 +30,23 @@ interface Tracking {
     updatedAt: string;
   };
   stops: Stop[];
-  pings: { lat: number; lng: number; accuracyM: number | null; recordedAt: string; risk: number }[];
+  pings: {
+    lat: number;
+    lng: number;
+    accuracyM: number | null;
+    recordedAt: string;
+    risk: number;
+    flags: string[];
+  }[];
+  reliability: {
+    score: number | null;
+    totalPings: number;
+    flaggedPings: number;
+    cleanRatio: number;
+    gapRate: number;
+    onTime: boolean | null;
+    byCode: Record<string, number>;
+  };
   eta: { stopSeq: number; stopLabel: string | null; distanceM: number; minutes: number; arrivesAt: string } | null;
   lastPingAt: string | null;
 }
@@ -60,6 +77,11 @@ const timeAgo = (iso: string | null) => {
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
   return `${Math.round(seconds / 3600)}h ago`;
 };
+
+const scoreColor = (s: number) => (s >= 85 ? 'text-emerald-600' : s >= 70 ? 'text-amber-600' : 'text-rose-600');
+const scoreBar = (s: number) => (s >= 85 ? 'bg-emerald-500' : s >= 70 ? 'bg-amber-500' : 'bg-rose-500');
+const riskDot = (risk: number) =>
+  risk >= 3 ? 'bg-rose-500' : risk === 2 ? 'bg-amber-500' : 'bg-slate-400';
 
 export default function LoadDetailPage() {
   const params = useParams<{ id: string }>();
@@ -153,6 +175,7 @@ export default function LoadDetailPage() {
 
   const t = data.tracking;
   const points = t.pings.map((p) => ({ lat: p.lat, lng: p.lng }));
+  const flaggedRecent = t.pings.filter((p) => p.risk > 0).slice(-5).reverse();
   const driverUrl = `${window.location.origin}${data.driverUrlPath}`;
 
   return (
@@ -187,6 +210,75 @@ export default function LoadDetailPage() {
             Last ping {timeAgo(t.lastPingAt)} · {t.pings.length} ping{t.pings.length === 1 ? '' : 's'} · refreshes
             every 15s
           </p>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Ping integrity</p>
+            <p className="text-[11px] text-slate-500">
+              {t.reliability.totalPings} ping{t.reliability.totalPings === 1 ? '' : 's'} ·{' '}
+              {t.reliability.flaggedPings} flagged
+            </p>
+          </div>
+
+          {t.reliability.score === null ? (
+            <p className="mt-2 text-xs text-slate-500">
+              No pings yet — the reliability score appears after the first location update.
+            </p>
+          ) : (
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <div className="flex items-baseline gap-1">
+                <span className={`text-2xl font-extrabold ${scoreColor(t.reliability.score)}`}>
+                  {t.reliability.score}
+                </span>
+                <span className="text-xs text-slate-400">/ 100</span>
+              </div>
+              <div className="h-2 min-w-[140px] flex-1 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className={`h-full ${scoreBar(t.reliability.score)}`}
+                  style={{ width: `${t.reliability.score}%` }}
+                />
+              </div>
+              {t.reliability.onTime !== null && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                    t.reliability.onTime ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  {t.reliability.onTime ? 'On time' : 'Late'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {Object.keys(t.reliability.byCode).length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {Object.entries(t.reliability.byCode).map(([code, count]) => (
+                <span
+                  key={code}
+                  className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800"
+                >
+                  {FLAG_LABELS[code] ?? code} ×{count}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {flaggedRecent.length > 0 && (
+            <ul className="mt-3 space-y-1 text-xs text-slate-600">
+              {flaggedRecent.map((p) => (
+                <li key={p.recordedAt} className="flex flex-wrap items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full ${riskDot(p.risk)}`} />
+                  <span className="font-mono text-[11px] text-slate-500">
+                    {new Date(p.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span>{p.flags.map((c) => FLAG_LABELS[c] ?? c).join(', ') || 'flagged'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p className="mt-3 text-[11px] text-slate-400">{RISK_COPY}</p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">

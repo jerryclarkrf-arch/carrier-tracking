@@ -1,5 +1,6 @@
 import { averageSpeedMps, etaTo } from '@/lib/geo';
 import type { LoadRow, PingRow, StopRow } from '@/lib/loads';
+import { reliabilityFrom, type Reliability } from '@/lib/risk';
 
 export interface TrackingPayload {
   load: {
@@ -28,7 +29,9 @@ export interface TrackingPayload {
     accuracyM: number | null;
     recordedAt: string;
     risk: number;
+    flags: string[];
   }[];
+  reliability: Reliability;
   eta: {
     stopSeq: number;
     stopLabel: string | null;
@@ -38,6 +41,17 @@ export interface TrackingPayload {
   } | null;
   lastPingAt: string | null;
 }
+
+const flagCodes = (raw: unknown): string[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((f) => {
+      if (typeof f === 'string') return f;
+      if (f && typeof f === 'object' && 'code' in f) return String((f as { code: unknown }).code);
+      return '';
+    })
+    .filter(Boolean);
+};
 
 /** Shared shaping for the broker detail view and the public token endpoints. */
 export function buildTracking(load: LoadRow, stops: StopRow[], pings: PingRow[]): TrackingPayload {
@@ -87,7 +101,9 @@ export function buildTracking(load: LoadRow, stops: StopRow[], pings: PingRow[])
       accuracyM: p.accuracy_m,
       recordedAt: p.recorded_at,
       risk: p.risk,
+      flags: flagCodes(p.flags),
     })),
+    reliability: reliabilityFrom(pings, load.delivered_at, load.deliver_at),
     eta,
     lastPingAt: latest?.recorded_at ?? null,
   };

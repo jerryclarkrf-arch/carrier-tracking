@@ -36,6 +36,27 @@ npm run dev
 `db/migrations/001_tracking.sql` — brokers, loads, load_stops, tracking_tokens,
 pings, documents, alerts, api_keys, webhook_endpoints, webhook_deliveries.
 
+## Ping integrity flags
+
+Every incoming ping is scored 0–3 from heuristics that run at insert time
+(`lib/risk.ts`). Flags are stored on the ping row (`risk`, `flags`) and summed
+into a per-load reliability score (clean pings 75%, no signal gaps 25%, −10 if
+late).
+
+| Flag | Meaning |
+| --- | --- |
+| `teleport` / `implausible_speed` | implied speed above ~134 / ~100 mph between two pings |
+| `low_accuracy` | reported GPS accuracy worse than 500 m (sev 1) or 2,000 m (sev 2) |
+| `signal_gap` | more than 30 min between pings while the load is active |
+| `ip_location_mismatch` | network location (Vercel `x-vercel-ip-*` headers) more than 300 km from the reported position |
+| `device_change` | user agent changed mid-load |
+| `stationary` | position unchanged for over 2 h (frozen GPS) |
+| `future_timestamp` / `stale_timestamp` / `duplicate_timestamp` | implausible client clock |
+
+**These are risk indicators, not proof.** The UI says so on every load
+(`RISK_COPY`), and we never label a driver as "spoofing" — the flags exist to
+prompt a human review (double-brokering, cargo-theft, and disputes).
+
 ## Build order
 
 1. Loads + stops + carrier snapshot

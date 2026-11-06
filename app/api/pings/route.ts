@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
-import { applyGeofence, getTokenContext } from '@/lib/loads';
+import { applyGeofence, getRecentPings, getTokenContext } from '@/lib/loads';
+import { assessPing } from '@/lib/risk';
 import { isWellFormedToken } from '@/lib/tokens';
 
 export const dynamic = 'force-dynamic';
@@ -68,24 +69,66 @@ export async function POST(req: NextRequest) {
   lastAccepted.set(throttleKey, Date.now());
 
   const recordedAt = clampTime(body.recordedAt);
+  const receivedAt = new Date();
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
   const ua = req.headers.get('user-agent')?.slice(0, 300) ?? null;
+  const accuracy = finite(body.accuracy) ? Math.min(100000, Math.max(0, body.accuracy)) : null;
+
+  // Vercel adds coarse geo headers for the requesting IP; absent when running locally.
+  const geoLat = Number(req.headers.get('x-vercel-ip-latitude'));
+  const geoLng = Number(req.headers.get('x-vercel-ip-longitude'));
+  const ipGeo =
+    Number.isFinite(geoLat) && Number.isFinite(geoLng) && (geoLat !== 0 || geoLng !== 0)
+      ? { lat: geoLat, lng: geoLng }
+      : null;
 
   try {
+    const recentDesc = await getRecentPings(ctx.load.id, 4);
+    const previous = recentDesc[0] ?? null;
+
+    const { risk, flags } = assessPing({
+      current: {
+        lat: body.lat,
+        lng: body.lng,
+        accuracyM: accuracy,
+        recordedAt: recordedAt.toISOString(),
+        receivedAt: receivedAt.toISOString(),
+        userAgent: ua,
+      },
+      previous: previous
+        ? {
+            lat: previous.lat,
+            lng: previous.lng,
+            recordedAt: previous.recorded_at,
+            userAgent: previous.user_agent,
+          }
+        : null,
+      recent: [...recentDesc].reverse().map((p) => ({
+        lat: p.lat,
+        lng: p.lng,
+        recordedAt: p.recorded_at,
+        userAgent: p.user_agent,
+      })),
+      ipGeo,
+      loadStatus: ctx.load.status,
+    });
+
     await query(
-      `INSERT INTO pings (load_id, token_id, lat, lng, accuracy_m, heading, speed_mps, recorded_at, ip, user_agent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      `INSERT INTO pings (load_id, token_id, lat, lng, accuracy_m, heading, speed_mps, recorded_at, ip, user_agent, risk, flags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,
       [
         ctx.load.id,
         ctx.tokenId,
         body.lat,
         body.lng,
-        finite(body.accuracy) ? Math.min(100000, Math.max(0, body.accuracy)) : null,
+        accuracy,
         finite(body.heading) ? Math.min(360, Math.max(0, body.heading)) : null,
         finite(body.speed) ? Math.min(90, Math.max(0, body.speed)) : null,
         recordedAt.toISOString(),
         ip,
         ua,
+        risk,
+        JSON.stringify(flags),
       ]
     );
 
@@ -97,7 +140,13 @@ export async function POST(req: NextRequest) {
 
     const changed = await applyGeofence(ctx.load, { lat: body.lat, lng: body.lng }, recordedAt.toISOString());
 
-    return NextResponse.json({ ok: true, receivedAt: new Date().toISOString(), events: changed });
+    return NextResponse.json({
+      ok: true,
+      receivedAt: new Date().toISOString(),
+      risk,
+      flags: flags.map((f) => f.code),
+      events: changed,
+    });
   } catch (e) {
     return NextResponse.json(
       { error: 'Could not store ping', detail: e instanceof Error ? e.message : String(e) },

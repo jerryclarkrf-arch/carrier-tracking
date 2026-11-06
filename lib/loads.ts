@@ -82,6 +82,23 @@ export async function getPings(loadId: string, limit = 200): Promise<PingRow[]> 
   );
 }
 
+export interface PingHistoryRow {
+  lat: number;
+  lng: number;
+  accuracy_m: number | null;
+  recorded_at: string;
+  user_agent: string | null;
+}
+
+/** Just enough history to run the integrity checks on an incoming ping. */
+export async function getRecentPings(loadId: string, limit = 4): Promise<PingHistoryRow[]> {
+  return query<PingHistoryRow>(
+    `SELECT lat, lng, accuracy_m, recorded_at, user_agent
+       FROM pings WHERE load_id = $1 ORDER BY recorded_at DESC LIMIT $2`,
+    [loadId, limit]
+  );
+}
+
 export interface CreateLoadInput {
   brokerId: string;
   reference?: string | null;
