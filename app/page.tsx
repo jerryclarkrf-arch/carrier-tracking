@@ -62,7 +62,7 @@ export default function Home() {
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-blue-50 px-6 py-8 shadow-sm">
           <span className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white/80 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-            Phase 0 · scaffold live
+            Phase 1 · live tracking
           </span>
           <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-slate-900 md:text-4xl">Load Tracking</h1>
           <p className="mt-2 max-w-xl text-sm text-slate-600">
@@ -78,6 +78,20 @@ export default function Home() {
             </a>
             .
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Link
+              href="/loads"
+              className="inline-flex items-center rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+            >
+              Open loads
+            </Link>
+            <Link
+              href="/loads/new"
+              className="inline-flex items-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              Create a load
+            </Link>
+          </div>
         </section>
 
         <section className="grid gap-3 sm:grid-cols-3">

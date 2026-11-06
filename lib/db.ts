@@ -12,7 +12,7 @@ export function getPool(): Pool {
   return pool;
 }
 
-export async function query<T extends Record<string, unknown>>(text: string, values: unknown[] = []): Promise<T[]> {
+export async function query<T extends object = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<T[]> {
   const { rows } = await getPool().query(text, values);
   return rows as T[];
 }
