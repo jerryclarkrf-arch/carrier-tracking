@@ -171,6 +171,8 @@ export default function DriverPage() {
           setRouteInfo(nextRoute);
           setRouteProblem(null);
           offRouteRef.current = 0;
+          // A new route means new maneuvers — let the driver hear them again.
+          spokenRef.current.clear();
         } else {
           setRouteProblem(String(json.reason ?? 'routing_unavailable'));
         }
