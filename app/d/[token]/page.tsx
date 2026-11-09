@@ -2,6 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
+import LoadMap from '@/components/LoadMap';
+import {
+  describeStep,
+  formatDistance,
+  googleMapsUrl,
+  maneuverGlyph,
+  nextManeuver,
+  projectOnRoute,
+  type NavStep,
+} from '@/lib/nav';
 
 interface TrackPayload {
   kind: string;
@@ -13,7 +23,14 @@ interface TrackPayload {
     originLabel: string | null;
     destinationLabel: string | null;
   };
-  stops: { seq: number; kind: string; label: string | null; arrivedAt: string | null }[];
+  stops: {
+    seq: number;
+    kind: string;
+    label: string | null;
+    lat: number | null;
+    lng: number | null;
+    arrivedAt: string | null;
+  }[];
   pings: { lat: number; lng: number; recordedAt: string }[];
   eta: { stopLabel: string | null; distanceM: number; minutes: number; arrivesAt: string } | null;
   lastPingAt: string | null;
@@ -49,6 +66,25 @@ export default function DriverPage() {
   const watchRef = useRef<number | null>(null);
   const lastSend = useRef<{ at: number; lat: number; lng: number } | null>(null);
 
+  // Drive Mode
+  const [routeInfo, setRouteInfo] = useState<{
+    geometry: [number, number][];
+    steps: NavStep[];
+    distanceM: number;
+    durationS: number;
+  } | null>(null);
+  const [destination, setDestination] = useState<{ lat: number; lng: number; label: string | null } | null>(null);
+  const [maneuver, setManeuver] = useState<{ glyph: string; text: string; distanceM: number } | null>(null);
+  const [arrival, setArrival] = useState<string | null>(null);
+  const [voiceOn, setVoiceOn] = useState(true);
+  const [routeProblem, setRouteProblem] = useState<string | null>(null);
+
+  const routeRef = useRef<typeof routeInfo>(null);
+  const voiceRef = useRef(true);
+  const offRouteRef = useRef(0);
+  const spokenRef = useRef<Set<string>>(new Set());
+  const wakeRef = useRef<{ release: () => Promise<void> } | null>(null);
+
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
@@ -69,6 +105,140 @@ export default function DriverPage() {
     const kick = setTimeout(() => void refresh(), 0);
     return () => clearTimeout(kick);
   }, [refresh]);
+
+  const speak = useCallback((text: string) => {
+    if (!voiceRef.current || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1;
+      utterance.lang = 'en-US';
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      /* TTS unavailable */
+    }
+  }, []);
+
+  const buzz = useCallback(() => {
+    try {
+      navigator.vibrate?.([200, 100, 200]);
+    } catch {
+      /* unsupported */
+    }
+  }, []);
+
+  const acquireWakeLock = useCallback(async () => {
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (type: 'screen') => Promise<{ release: () => Promise<void> }> };
+      };
+      if (!nav.wakeLock || document.visibilityState !== 'visible') return;
+      wakeRef.current = await nav.wakeLock.request('screen');
+    } catch {
+      /* denied or unsupported */
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(async () => {
+    try {
+      await wakeRef.current?.release();
+    } catch {
+      /* ignore */
+    }
+    wakeRef.current = null;
+  }, []);
+
+  const loadRoute = useCallback(
+    async (at?: { lat: number; lng: number }) => {
+      if (!token) return;
+      try {
+        const res = await fetch('/api/route', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token, lat: at?.lat, lng: at?.lng }),
+        });
+        const json = await res.json();
+        if (!res.ok) return;
+
+        setDestination(json.destination ?? null);
+        if (json.route) {
+          const nextRoute = {
+            geometry: (json.route.geometry ?? []) as [number, number][],
+            steps: (json.route.steps ?? []) as NavStep[],
+            distanceM: Number(json.route.distanceM) || 0,
+            durationS: Number(json.route.durationS) || 0,
+          };
+          routeRef.current = nextRoute;
+          setRouteInfo(nextRoute);
+          setRouteProblem(null);
+          offRouteRef.current = 0;
+        } else {
+          setRouteProblem(String(json.reason ?? 'routing_unavailable'));
+        }
+      } catch {
+        setRouteProblem('routing_unavailable');
+      }
+    },
+    [token]
+  );
+
+  const updateNav = useCallback(
+    (at: { lat: number; lng: number }) => {
+      const route = routeRef.current;
+      if (!route || route.geometry.length < 2 || route.steps.length === 0) return;
+
+      const { distanceAlongM, offRouteM } = projectOnRoute(at, route.geometry);
+      offRouteRef.current = offRouteM > 100 ? offRouteRef.current + 1 : 0;
+
+      const next = nextManeuver(route.steps, distanceAlongM);
+      if (!next) return;
+
+      setManeuver({
+        glyph: maneuverGlyph(next.step),
+        text: describeStep(next.step),
+        distanceM: next.distanceToM,
+      });
+
+      for (const threshold of [800, 300, 80]) {
+        if (next.distanceToM > threshold) continue;
+        const key = `${next.index}:${threshold}`;
+        if (spokenRef.current.has(key)) break;
+        spokenRef.current.add(key);
+        speak(
+          threshold === 80
+            ? `${describeStep(next.step)} now`
+            : `In ${threshold} metres, ${describeStep(next.step)}`
+        );
+        break;
+      }
+
+      if (offRouteRef.current >= 2) {
+        offRouteRef.current = 0;
+        void loadRoute(at);
+      }
+    },
+    [speak, loadRoute]
+  );
+
+  const handleEvents = useCallback(
+    (events: string[]) => {
+      let message: string | null = null;
+      if (events.includes('delivered')) {
+        message = 'Delivery confirmed — thanks for sharing your location.';
+        speak('Delivery confirmed.');
+      } else if (events.includes('drop')) {
+        message = 'You have arrived at the drop-off.';
+        speak('You have arrived at the drop-off.');
+      } else if (events.includes('pickup')) {
+        message = 'You have arrived at the pickup.';
+        speak('You have arrived at the pickup.');
+      }
+      if (!message) return;
+      setArrival(message);
+      buzz();
+      window.setTimeout(() => setArrival(null), 8000);
+    },
+    [speak, buzz]
+  );
 
   const sendPing = useCallback(
     async (pos: GeolocationPosition) => {
@@ -95,6 +265,7 @@ export default function DriverPage() {
             recordedAt: new Date(pos.timestamp).toISOString(),
           }),
         });
+        const json = (await res.json().catch(() => ({}))) as { events?: string[]; error?: string };
 
         if (res.ok) {
           lastSend.current = { at: Date.now(), ...at };
@@ -103,17 +274,18 @@ export default function DriverPage() {
           setAccuracy(Number.isFinite(pos.coords.accuracy) ? Math.round(pos.coords.accuracy) : null);
           setState('live');
           setNotice(null);
+          updateNav(at);
+          if (Array.isArray(json.events) && json.events.length > 0) handleEvents(json.events);
           return;
         }
 
-        const json = await res.json().catch(() => ({}));
         if (res.status === 410) setError(json.error || 'This link has expired.');
         else if (res.status !== 429) setNotice(json.error || 'Could not send your location.');
       } catch {
         setNotice('Network hiccup — will retry on the next update.');
       }
     },
-    [token]
+    [token, updateNav, handleEvents]
   );
 
   const stopSharing = useCallback(() => {
@@ -121,9 +293,22 @@ export default function DriverPage() {
       navigator.geolocation.clearWatch(watchRef.current);
       watchRef.current = null;
     }
+    void releaseWakeLock();
     setSharing(false);
     setState('idle');
-  }, []);
+  }, [releaseWakeLock]);
+
+  // The browser drops the wake lock whenever the tab hides; re-acquire and
+  // refresh the route when the driver comes back.
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || !sharing) return;
+      void acquireWakeLock();
+      void loadRoute();
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [sharing, acquireWakeLock, loadRoute]);
 
   function startSharing() {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -140,6 +325,9 @@ export default function DriverPage() {
       },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 }
     );
+    void acquireWakeLock();
+    void loadRoute();
+    speak('Tracking started. Drive safely.');
   }
 
   useEffect(() => {
@@ -197,6 +385,11 @@ export default function DriverPage() {
       </header>
 
       <div className="mx-auto max-w-md space-y-4 px-4 py-5">
+        {arrival && (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+            {arrival}
+          </div>
+        )}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Load</p>
           <p className="mt-1 text-lg font-extrabold text-slate-900">{data.load.reference || 'Unnamed load'}</p>
@@ -219,6 +412,72 @@ export default function DriverPage() {
             )}
           </div>
         </div>
+
+        {!delivered && (
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            {maneuver ? (
+              <div className="flex items-center gap-3 bg-blue-600 px-4 py-3 text-white">
+                <span className="text-2xl leading-none">{maneuver.glyph}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold">{maneuver.text}</p>
+                  <p className="text-[11px] text-blue-100">in {formatDistance(maneuver.distanceM)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVoiceOn((v) => {
+                      voiceRef.current = !v;
+                      return !v;
+                    });
+                  }}
+                  className="rounded-lg border border-white/40 px-2 py-1 text-[11px] font-semibold"
+                  aria-label="Toggle voice guidance"
+                >
+                  {voiceOn ? 'Voice on' : 'Muted'}
+                </button>
+              </div>
+            ) : (
+              <div className="px-4 py-2 text-xs text-slate-500">
+                {routeProblem === 'routing_unavailable'
+                  ? 'Turn-by-turn unavailable right now — use Open in Maps.'
+                  : routeProblem === 'throttled'
+                    ? 'Updating the route…'
+                    : 'Route ready — waiting for GPS.'}
+              </div>
+            )}
+
+            <LoadMap
+              points={[]}
+              stops={data.stops.map((s) => ({
+                kind: s.kind,
+                label: s.label,
+                lat: s.lat,
+                lng: s.lng,
+                arrivedAt: s.arrivedAt,
+              }))}
+              route={routeInfo?.geometry}
+              height={220}
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+              <p className="text-[11px] text-slate-500">
+                {routeInfo
+                  ? `${formatDistance(routeInfo.distanceM)} · ~${Math.max(1, Math.round(routeInfo.durationS / 60))} min`
+                  : 'Open in Maps for turn-by-turn'}
+              </p>
+              {destination && (
+                <a
+                  href={googleMapsUrl(destination.lat, destination.lng)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700"
+                >
+                  Open in Google Maps
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           {delivered ? (

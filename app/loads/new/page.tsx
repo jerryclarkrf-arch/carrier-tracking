@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Nav from '@/components/Nav';
+import AddressField, { type AddressValue } from '@/components/AddressField';
 
 interface Carrier {
   dot: string;
@@ -22,14 +23,6 @@ interface Carrier {
 const inputCls =
   'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100';
 
-function parseCoords(value: string): { lat?: number; lng?: number } {
-  const parts = value.split(',').map((p) => Number.parseFloat(p.trim()));
-  if (parts.length !== 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return {};
-  const [lat, lng] = parts;
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return {};
-  return { lat, lng };
-}
-
 export default function NewLoadPage() {
   const router = useRouter();
   const [reference, setReference] = useState('');
@@ -37,10 +30,8 @@ export default function NewLoadPage() {
   const [carrier, setCarrier] = useState<Carrier | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
-  const [originLabel, setOriginLabel] = useState('');
-  const [originCoords, setOriginCoords] = useState('');
-  const [destLabel, setDestLabel] = useState('');
-  const [destCoords, setDestCoords] = useState('');
+  const [origin, setOrigin] = useState<AddressValue>({ label: '' });
+  const [destination, setDestination] = useState<AddressValue>({ label: '' });
   const [pickupAt, setPickupAt] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -76,10 +67,13 @@ export default function NewLoadPage() {
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setOriginCoords(`${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`);
-        if (!originLabel) setOriginLabel('My current location');
+        setOrigin((current) => ({
+          label: current.label || 'My current location',
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        }));
       },
-      () => setError('Could not read your location. Paste coordinates instead.'),
+      () => setError('Could not read your location. Type an address instead.'),
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }
@@ -87,8 +81,8 @@ export default function NewLoadPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!originLabel.trim() || !destLabel.trim()) {
-      setError('Origin and destination labels are required.');
+    if (!origin.label.trim() || !destination.label.trim()) {
+      setError('Origin and destination are required.');
       return;
     }
     setSaving(true);
@@ -99,8 +93,8 @@ export default function NewLoadPage() {
         body: JSON.stringify({
           reference: reference.trim() || undefined,
           carrierDot: dot.replace(/\D/g, '') || undefined,
-          origin: { label: originLabel.trim(), ...parseCoords(originCoords) },
-          destination: { label: destLabel.trim(), ...parseCoords(destCoords) },
+          origin: { label: origin.label.trim(), lat: origin.lat, lng: origin.lng },
+          destination: { label: destination.label.trim(), lat: destination.lat, lng: destination.lng },
           pickupAt: pickupAt ? new Date(pickupAt).toISOString() : undefined,
         }),
       });
@@ -185,25 +179,13 @@ export default function NewLoadPage() {
             )}
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Origin label</label>
-              <input
-                className={inputCls}
-                value={originLabel}
-                onChange={(e) => setOriginLabel(e.target.value)}
-                placeholder="e.g. Atlanta, GA"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Origin coordinates</label>
-              <div className="flex gap-2">
-                <input
-                  className={inputCls}
-                  value={originCoords}
-                  onChange={(e) => setOriginCoords(e.target.value)}
-                  placeholder="33.7490, -84.3880"
-                />
+          <div className="grid gap-4">
+            <AddressField
+              label="Origin"
+              value={origin}
+              onChange={setOrigin}
+              placeholder="e.g. 505 NW 9th Ave, Pompano Beach, FL 33060"
+              extraAction={
                 <button
                   type="button"
                   onClick={useMyLocation}
@@ -211,31 +193,20 @@ export default function NewLoadPage() {
                 >
                   Use mine
                 </button>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Destination label</label>
-              <input
-                className={inputCls}
-                value={destLabel}
-                onChange={(e) => setDestLabel(e.target.value)}
-                placeholder="e.g. Dallas, TX"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Destination coordinates</label>
-              <input
-                className={inputCls}
-                value={destCoords}
-                onChange={(e) => setDestCoords(e.target.value)}
-                placeholder="32.7767, -96.7970"
-              />
-            </div>
+              }
+            />
+            <AddressField
+              label="Destination"
+              value={destination}
+              onChange={setDestination}
+              placeholder="e.g. 1600 Pennsylvania Ave NW, Washington, DC"
+            />
           </div>
 
           <p className="text-[11px] text-slate-400">
-            Coordinates are what make live tracking work. Paste them as <span className="font-mono">lat, lng</span>{' '}
-            (Google Maps: right-click → copy coordinates). Without both pairs the load is saved as a draft.
+            Start typing a street address, city or ZIP and pick a suggestion — coordinates are filled in
+            automatically. You can still paste <span className="font-mono">lat, lng</span> directly. Without
+            coordinates the load is saved as a draft.
           </p>
 
           {error && (

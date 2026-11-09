@@ -11,6 +11,7 @@ export interface Place {
 
 export interface LoadRow {
   id: string;
+  broker_id: string;
   reference: string | null;
   status: string;
   carrier_dot: string | null;
@@ -48,7 +49,7 @@ export interface PingRow {
   flags: unknown[];
 }
 
-const LOAD_COLS = `id, reference, status, carrier_dot, carrier_name, carrier_snapshot,
+const LOAD_COLS = `id, broker_id, reference, status, carrier_dot, carrier_name, carrier_snapshot,
   origin, destination, pickup_at, deliver_at, delivered_at, created_at, updated_at`;
 
 export async function listLoads(brokerId: string): Promise<LoadRow[]> {

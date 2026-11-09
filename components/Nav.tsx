@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import AuthLinks from '@/components/AuthLinks';
@@ -8,6 +9,22 @@ const SNAPSHOT_URL = process.env.NEXT_PUBLIC_SNAPSHOT_URL || 'https://carrier-sn
 
 export default function Nav() {
   const path = usePathname();
+  const [me, setMe] = useState<{ isAdmin: boolean; unread: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (cancelled || !j) return;
+        setMe({ isAdmin: !!j.isAdmin, unread: Number(j.unread) || 0 });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [path]);
+
   const link = (href: string, label: string) => {
     const active = href === '/' ? path === '/' : path.startsWith(href);
     return (
@@ -48,6 +65,27 @@ export default function Nav() {
           >
             Carrier Snapshot ↗
           </a>
+          {me && (
+            <Link
+              href="/alerts"
+              className="relative hidden items-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 sm:inline-flex"
+            >
+              Alerts
+              {me.unread > 0 && (
+                <span className="rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white">
+                  {me.unread > 9 ? '9+' : me.unread}
+                </span>
+              )}
+            </Link>
+          )}
+          {me?.isAdmin && (
+            <Link
+              href="/admin"
+              className="hidden rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-100 sm:inline-block"
+            >
+              Admin
+            </Link>
+          )}
           <AuthLinks />
         </div>
       </div>

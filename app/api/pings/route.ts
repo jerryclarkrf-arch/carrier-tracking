@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { recordAlert } from '@/lib/alerts';
 import { query } from '@/lib/db';
 import { applyGeofence, getRecentPings, getTokenContext } from '@/lib/loads';
 import { assessPing } from '@/lib/risk';
@@ -139,6 +140,24 @@ export async function POST(req: NextRequest) {
     }
 
     const changed = await applyGeofence(ctx.load, { lat: body.lat, lng: body.lng }, recordedAt.toISOString());
+
+    const alertBase = { brokerId: ctx.load.broker_id, loadId: ctx.load.id };
+    if (changed.includes('pickup')) {
+      await recordAlert({ ...alertBase, kind: 'arrived_pickup', payload: { at: recordedAt.toISOString() } });
+    }
+    if (changed.includes('drop')) {
+      await recordAlert({ ...alertBase, kind: 'arrived_drop', payload: { at: recordedAt.toISOString() } });
+    }
+    if (changed.includes('delivered')) {
+      await recordAlert({ ...alertBase, kind: 'load_delivered', payload: { at: recordedAt.toISOString() } });
+    }
+    if (risk >= 2) {
+      await recordAlert({
+        ...alertBase,
+        kind: 'ping_flagged',
+        payload: { risk, flags: flags.map((f) => f.code), at: recordedAt.toISOString() },
+      });
+    }
 
     return NextResponse.json({
       ok: true,

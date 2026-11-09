@@ -19,13 +19,25 @@ export interface MapStop {
 
 const valid = (p: MapPoint) => Number.isFinite(p.lat) && Number.isFinite(p.lng);
 
+export interface MapVehicle {
+  lat: number;
+  lng: number;
+  label?: string;
+}
+
 export default function LoadMap({
   points,
   stops,
+  route,
+  vehicles,
+  follow,
   height = 360,
 }: {
   points: MapPoint[];
   stops: MapStop[];
+  route?: [number, number][];
+  vehicles?: MapVehicle[];
+  follow?: { lat: number; lng: number } | null;
   height?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -33,7 +45,7 @@ export default function LoadMap({
   const layerRef = useRef<LayerGroup | null>(null);
 
   // Serialised so the effect only re-runs when the geometry actually changes.
-  const data = JSON.stringify({ points, stops });
+  const data = JSON.stringify({ points, stops, route, vehicles, follow });
 
   useEffect(() => {
     let disposed = false;
@@ -57,11 +69,27 @@ export default function LoadMap({
       if (!map || !layer) return;
       layer.clearLayers();
 
-      const parsed = JSON.parse(data) as { points: MapPoint[]; stops: MapStop[] };
+      const parsed = JSON.parse(data) as {
+        points: MapPoint[];
+        stops: MapStop[];
+        route?: [number, number][];
+        vehicles?: MapVehicle[];
+        follow?: { lat: number; lng: number } | null;
+      };
       const track = parsed.points.filter(valid);
       const stopPoints = parsed.stops
         .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
         .map((s) => ({ ...s, lat: s.lat as number, lng: s.lng as number }));
+
+      const routeLine = (parsed.route ?? []).filter(
+        (c) => Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])
+      );
+      if (routeLine.length > 1) {
+        L.polyline(
+          routeLine.map(([lng, lat]) => [lat, lng] as [number, number]),
+          { color: '#0ea5e9', weight: 5, opacity: 0.75 }
+        ).addTo(layer);
+      }
 
       if (track.length > 1) {
         L.polyline(
@@ -69,6 +97,19 @@ export default function LoadMap({
           { color: '#2563eb', weight: 3, opacity: 0.85 }
         ).addTo(layer);
       }
+
+      (parsed.vehicles ?? []).forEach((v) => {
+        if (!Number.isFinite(v.lat) || !Number.isFinite(v.lng)) return;
+        L.circleMarker([v.lat, v.lng], {
+          radius: 7,
+          color: '#1d4ed8',
+          weight: 2,
+          fillColor: '#93c5fd',
+          fillOpacity: 1,
+        })
+          .addTo(layer)
+          .bindTooltip(v.label ?? 'Vehicle');
+      });
 
       const last = track[track.length - 1];
       if (last) {
@@ -95,8 +136,18 @@ export default function LoadMap({
           .bindTooltip(`${s.kind === 'pickup' ? 'Pickup' : 'Drop-off'}: ${s.label ?? ''}`);
       });
 
-      const all = [...track.map((p) => [p.lat, p.lng] as [number, number]), ...stopPoints.map((s) => [s.lat, s.lng] as [number, number])];
-      if (all.length === 1) map.setView(all[0], 12);
+      const all: [number, number][] = [
+        ...track.map((p) => [p.lat, p.lng] as [number, number]),
+        ...stopPoints.map((s) => [s.lat, s.lng] as [number, number]),
+        ...routeLine.map(([lng, lat]) => [lat, lng] as [number, number]),
+        ...(parsed.vehicles ?? [])
+          .filter((v) => Number.isFinite(v.lat) && Number.isFinite(v.lng))
+          .map((v) => [v.lat, v.lng] as [number, number]),
+      ];
+
+      if (parsed.follow && Number.isFinite(parsed.follow.lat) && Number.isFinite(parsed.follow.lng)) {
+        map.setView([parsed.follow.lat, parsed.follow.lng], 15);
+      } else if (all.length === 1) map.setView(all[0], 12);
       else if (all.length > 1) map.fitBounds(L.latLngBounds(all).pad(0.25));
       map.invalidateSize();
     };
